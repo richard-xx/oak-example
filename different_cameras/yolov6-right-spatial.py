@@ -186,7 +186,7 @@ with dai.Device(pipeline) as device:
         if depthFrameColor is not None:
             cv2.imshow("depth", depthFrameColor)
 
-    while True:
+    while not device.isClosed():
         inRgb = imageQueue.tryGet()
         inDet = detectQueue.tryGet()
         depth = depthQueue.get()

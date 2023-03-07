@@ -1,10 +1,12 @@
 # coding=utf-8
 from pathlib import Path
+from time import monotonic
 
 import cv2
 import depthai as dai
 import numpy as np
 
+videoPath = "demo.mp4"
 blob = Path(__file__).parent.joinpath("yolov6n.blob")
 model = dai.OpenVINO.Blob(blob)
 dim = model.networkInputs.get("images").dims
@@ -30,21 +32,12 @@ labelMap = [
 pipeline = dai.Pipeline()
 
 # Define sources and outputs
-camRgb = pipeline.create(dai.node.ColorCamera)
+xinFrame = pipeline.create(dai.node.XLinkIn)
 detectionNetwork = pipeline.create(dai.node.YoloDetectionNetwork)
-xoutRgb = pipeline.create(dai.node.XLinkOut)
 xoutNN = pipeline.create(dai.node.XLinkOut)
 
-xoutRgb.setStreamName("image")
+xinFrame.setStreamName("inFrame")
 xoutNN.setStreamName("detections")
-
-# Properties
-camRgb.setPreviewSize(W, H)
-camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-camRgb.setBoardSocket(dai.CameraBoardSocket.RGB)
-camRgb.setInterleaved(False)
-camRgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
-camRgb.setFps(60)
 
 # Network specific settings
 detectionNetwork.setBlob(model)
@@ -58,16 +51,15 @@ detectionNetwork.setAnchorMasks({})
 detectionNetwork.setIouThreshold(0.5)
 
 # Linking
-camRgb.preview.link(detectionNetwork.input)
-camRgb.preview.link(xoutRgb.input)
+xinFrame.out.link(detectionNetwork.input)
 detectionNetwork.out.link(xoutNN.input)
 
 # Connect to device and start pipeline
 with dai.Device(pipeline) as device:
-    # Output queues will be used to get the rgb frames and nn data from the outputs defined above
-    imageQueue = device.getOutputQueue(name="image", maxSize=4, blocking=False)
+    # Input queue will be used to send video frames to the device.
+    inFrameQueue = device.getInputQueue(name="inFrame")
+    # Output queue will be used to get nn data from the video frames.
     detectQueue = device.getOutputQueue(name="detections", maxSize=4, blocking=False)
-
     frame = None
     detections = []
     color2 = (255, 255, 255)
@@ -80,6 +72,9 @@ with dai.Device(pipeline) as device:
         normVals = np.full(len(bbox), frame.shape[0])
         normVals[::2] = frame.shape[1]
         return (np.clip(np.array(bbox), 0, 1) * normVals).astype(int)
+
+    def to_planar(arr: np.ndarray, shape: tuple) -> np.ndarray:
+        return cv2.resize(arr, shape).transpose(2, 0, 1).flatten()
 
     def displayFrame(name, frame, depthFrameColor=None):
         color = (255, 0, 0)
@@ -153,12 +148,20 @@ with dai.Device(pipeline) as device:
         if depthFrameColor is not None:
             cv2.imshow("depth", depthFrameColor)
 
-    while not device.isClosed():
-        inRgb = imageQueue.tryGet()
-        inDet = detectQueue.tryGet()
+    cap = cv2.VideoCapture(videoPath)
+    while cap.isOpened():
+        read_correctly, frame = cap.read()
+        if not read_correctly:
+            break
 
-        if inRgb is not None:
-            frame = inRgb.getCvFrame()
+        img = dai.ImgFrame()
+        img.setData(to_planar(frame, (W, H)))
+        img.setTimestamp(monotonic())
+        img.setWidth(W)
+        img.setHeight(H)
+        inFrameQueue.send(img)
+
+        inDet = detectQueue.get()
 
         if inDet is not None:
             detections = inDet.detections

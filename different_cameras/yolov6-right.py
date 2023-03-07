@@ -159,7 +159,7 @@ with dai.Device(pipeline) as device:
         if depthFrameColor is not None:
             cv2.imshow("depth", depthFrameColor)
 
-    while True:
+    while not device.isClosed():
         inRight = qRight.tryGet()
         inDet = detectQueue.tryGet()
 
