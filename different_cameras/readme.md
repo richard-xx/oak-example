@@ -1,7 +1,9 @@
 # OAK 使用不同相机进行模型推理
+
 > 使用 oak 的 `LEFT`，`RIGHT` 和 `RGB` 相机进行 `YOLO` 检测
 
 ## **▌RGB**
+
 > 使用 `RGB` 相机作为输入源
 
 ```python
@@ -18,6 +20,7 @@ camRgb.preview.link(detectionNetwork.input)
 详见：[yolov6-rgb.py](yolov6-rgb.py)
 
 ## **▌RGB + DEPTH**
+
 > 使用 `RGB` 相机作为输入源，并附加深度信息
 
 ```python
@@ -50,6 +53,7 @@ stereo.depth.link(spatialDetectionNetwork.inputDepth)
 ---
 
 ## **▌RIGHT**
+
 > 使用 `RIGHT` 相机作为输入源
 
 ```python
@@ -73,6 +77,7 @@ imageManip.out.link(detectionNetwork.input)
 详见：[yolov6-right.py](yolov6-right.py)
 
 ## **▌RIGHT + DEPTH**
+
 > 使用 `RIGHT` 相机作为输入源，并附加深度信息
 
 ```python
@@ -136,6 +141,7 @@ imageManip.out.link(detectionNetwork.input)
 详见：[yolov6-left.py](yolov6-left.py)
 
 ## **▌LEFT + DEPTH**
+
 > 使用 `LEFT` 相机作为输入源，并附加深度信息
 
 ```python
@@ -173,6 +179,7 @@ stereo.depth.link(spatialDetectionNetwork.inputDepth)
 详见：[yolov6-left-spatial.py](yolov6-left-spatial.py)
 
 ## **▌VIDEO**
+
 > 使用 `VIDEO` 作为输入源
 
 ```python

@@ -5,10 +5,18 @@ import cv2
 import depthai as dai
 import numpy as np
 
+numClasses = 80
+
 blob = Path(__file__).parent.joinpath("yolov6n.blob")
 model = dai.OpenVINO.Blob(blob)
-dim = model.networkInputs.get("images").dims
+dim = next(iter(model.networkInputs.values())).dims
 W, H = dim[:2]
+
+output_name, output_tenser = next(iter(model.networkOutputs.items()))
+if "yolov6" in output_name:
+    numClasses = output_tenser.dims[2] - 5
+else:
+    numClasses = output_tenser.dims[2] // 3 - 5
 # fmt: off
 labelMap = [
     "person",         "bicycle",    "car",           "motorbike",     "aeroplane",   "bus",           "train",
@@ -68,11 +76,11 @@ spatialDetectionNetwork.setBlob(model)
 spatialDetectionNetwork.setConfidenceThreshold(0.5)
 
 # Yolo specific parameters
-spatialDetectionNetwork.setNumClasses(80)
+spatialDetectionNetwork.setNumClasses(numClasses)
 spatialDetectionNetwork.setCoordinateSize(4)
 spatialDetectionNetwork.setAnchors([])
 spatialDetectionNetwork.setAnchorMasks({})
-spatialDetectionNetwork.setIouThreshold(0.5)
+spatialDetectionNetwork.setIouThreshold(0.3)
 
 # spatial specific parameters
 spatialDetectionNetwork.setBoundingBoxScaleFactor(1)
@@ -111,27 +119,36 @@ with dai.Device(pipeline) as device:
         normVals[::2] = frame.shape[1]
         return (np.clip(np.array(bbox), 0, 1) * normVals).astype(int)
 
+    def drawText(frame, text, org, color=(255, 255, 255)):
+        cv2.putText(
+            frame,
+            text,
+            org,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 0),
+            4,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA
+        )
+
     def displayFrame(name, frame, depthFrameColor=None):
         color = (255, 0, 0)
         for detection in detections:
             bbox = frameNorm(
                 frame, (detection.xmin, detection.ymin, detection.xmax, detection.ymax)
             )
-            cv2.putText(
+            drawText(
                 frame,
                 labelMap[detection.label],
                 (bbox[0] + 10, bbox[1] + 20),
-                cv2.FONT_HERSHEY_TRIPLEX,
-                0.5,
-                255,
             )
-            cv2.putText(
+            drawText(
                 frame,
                 f"{detection.confidence:.2%}",
                 (bbox[0] + 10, bbox[1] + 35),
-                cv2.FONT_HERSHEY_TRIPLEX,
-                0.5,
-                255,
             )
             cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
             if hasattr(detection, "boundingBoxMapping") and depthFrameColor is not None:
@@ -153,29 +170,20 @@ with dai.Device(pipeline) as device:
                     cv2.FONT_HERSHEY_SCRIPT_SIMPLEX,
                 )
 
-                cv2.putText(
-                    frame,
+                drawText(
+                    depthFrameColor,
                     f"X: {int(detection.spatialCoordinates.x)} mm",
                     (bbox[0] + 10, bbox[1] + 50),
-                    cv2.FONT_HERSHEY_TRIPLEX,
-                    0.5,
-                    255,
                 )
-                cv2.putText(
-                    frame,
+                drawText(
+                    depthFrameColor,
                     f"Y: {int(detection.spatialCoordinates.y)} mm",
                     (bbox[0] + 10, bbox[1] + 65),
-                    cv2.FONT_HERSHEY_TRIPLEX,
-                    0.5,
-                    255,
                 )
-                cv2.putText(
-                    frame,
+                drawText(
+                    depthFrameColor,
                     f"Z: {int(detection.spatialCoordinates.z)} mm",
                     (bbox[0] + 10, bbox[1] + 80),
-                    cv2.FONT_HERSHEY_TRIPLEX,
-                    0.5,
-                    255,
                 )
 
         # Show the frame
@@ -184,18 +192,19 @@ with dai.Device(pipeline) as device:
             cv2.imshow("depth", depthFrameColor)
 
     while not device.isClosed():
-        inRgb = imageQueue.tryGet()
-        inDet = detectQueue.tryGet()
-        depth = depthQueue.get()
+        imageQueueData = imageQueue.tryGet()
+        detectQueueData = detectQueue.tryGet()
+        depthQueueData = depthQueue.get()
 
-        if inRgb is not None:
-            frame = inRgb.getCvFrame()
+        if imageQueueData is not None:
+            frame = imageQueueData.getCvFrame()
 
-        if inDet is not None:
-            detections = inDet.detections
+        if detectQueueData is not None:
+            detections = detectQueueData.detections
 
-        if depth is not None:
-            depthFrame = depth.getFrame()  # depthFrame values are in millimeters
+        if depthQueueData is not None:
+            # depthFrame values are in millimeters
+            depthFrame = depthQueueData.getFrame()
             depthFrameColor = cv2.normalize(
                 depthFrame, None, 255, 0, cv2.NORM_INF, cv2.CV_8UC1
             )
