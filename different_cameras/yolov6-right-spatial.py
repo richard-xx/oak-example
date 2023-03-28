@@ -109,8 +109,9 @@ with dai.Device(pipeline) as device:
 
     frame = None
     detections = []
-    color = (255, 0, 0)
-    color2 = (255, 255, 255)
+    bboxColors = (
+            np.random.random(size=(256, 3)) * numClasses
+    )  # Random Colors for bounding boxes
 
     def frameNorm(frame, bbox):
         """
@@ -137,7 +138,6 @@ with dai.Device(pipeline) as device:
         )
 
     def displayFrame(name, frame, depthFrameColor=None):
-        color = (255, 0, 0)
         for detection in detections:
             bbox = frameNorm(
                 frame, (detection.xmin, detection.ymin, detection.xmax, detection.ymax)
@@ -152,7 +152,7 @@ with dai.Device(pipeline) as device:
                 f"{detection.confidence:.2%}",
                 (bbox[0] + 10, bbox[1] + 35),
             )
-            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), bboxColors[detection.label], 2)
             if hasattr(detection, "boundingBoxMapping") and depthFrameColor is not None:
                 roi = detection.boundingBoxMapping.roi
                 roi = roi.denormalize(
@@ -168,7 +168,7 @@ with dai.Device(pipeline) as device:
                     depthFrameColor,
                     (xmin, ymin),
                     (xmax, ymax),
-                    color,
+                    bboxColors[detection.label],
                     cv2.FONT_HERSHEY_SCRIPT_SIMPLEX,
                 )
 
