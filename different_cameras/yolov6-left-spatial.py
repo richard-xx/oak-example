@@ -5,6 +5,8 @@ import cv2
 import depthai as dai
 import numpy as np
 
+from utils import displayFrame
+
 numClasses = 80
 
 blob = Path(__file__).parent.joinpath("yolov6n.blob")
@@ -58,8 +60,8 @@ monoLeft.setBoardSocket(dai.CameraBoardSocket.LEFT)
 monoRight.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
 monoRight.setBoardSocket(dai.CameraBoardSocket.RIGHT)
 
-imageManip.initialConfig.setResize(W, H)
-# The NN model expects BGR input. By default ImageManip output type would be same as input (gray in this case)
+imageManip.initialConfig.setResizeThumbnail(W, H, 114, 114, 114)
+# The NN model expects BGR input. By default, ImageManip output type would be same as input (gray in this case)
 imageManip.initialConfig.setFrameType(dai.ImgFrame.Type.BGR888p)
 imageManip.setMaxOutputFrameSize(W * H * 3)
 
@@ -109,89 +111,8 @@ with dai.Device(pipeline) as device:
 
     frame = None
     detections = []
-    bboxColors = (
-            np.random.random(size=(256, 3)) * numClasses
-    )  # Random Colors for bounding boxes
-
-    def frameNorm(frame, bbox):
-        """
-        nn data, being the bounding box locations, are in <0..1> range
-        - they need to be normalized with frame width/height
-        """
-        normVals = np.full(len(bbox), frame.shape[0])
-        normVals[::2] = frame.shape[1]
-        return (np.clip(np.array(bbox), 0, 1) * normVals).astype(int)
-
-    def drawText(frame, text, org, color=(255, 255, 255)):
-        cv2.putText(
-            frame,
-            text,
-            org,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 0, 0),
-            4,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA
-        )
-
-    def displayFrame(name, frame, depthFrameColor=None):
-        for detection in detections:
-            bbox = frameNorm(
-                frame, (detection.xmin, detection.ymin, detection.xmax, detection.ymax)
-            )
-            drawText(
-                frame,
-                labelMap[detection.label],
-                (bbox[0] + 10, bbox[1] + 20),
-            )
-            drawText(
-                frame,
-                f"{detection.confidence:.2%}",
-                (bbox[0] + 10, bbox[1] + 35),
-            )
-            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), bboxColors[detection.label], 2)
-            if hasattr(detection, "boundingBoxMapping") and depthFrameColor is not None:
-                roi = detection.boundingBoxMapping.roi
-                roi = roi.denormalize(
-                    depthFrameColor.shape[1], depthFrameColor.shape[0]
-                )
-                topLeft = roi.topLeft()
-                bottomRight = roi.bottomRight()
-                xmin = int(topLeft.x)
-                ymin = int(topLeft.y)
-                xmax = int(bottomRight.x)
-                ymax = int(bottomRight.y)
-                cv2.rectangle(
-                    depthFrameColor,
-                    (xmin, ymin),
-                    (xmax, ymax),
-                    bboxColors[detection.label],
-                    cv2.FONT_HERSHEY_SCRIPT_SIMPLEX,
-                )
-
-                drawText(
-                    depthFrameColor,
-                    f"X: {int(detection.spatialCoordinates.x)} mm",
-                    (bbox[0] + 10, bbox[1] + 50),
-                )
-                drawText(
-                    depthFrameColor,
-                    f"Y: {int(detection.spatialCoordinates.y)} mm",
-                    (bbox[0] + 10, bbox[1] + 65),
-                )
-                drawText(
-                    depthFrameColor,
-                    f"Z: {int(detection.spatialCoordinates.z)} mm",
-                    (bbox[0] + 10, bbox[1] + 80),
-                )
-
-        # Show the frame
-        cv2.imshow(name, frame)
-        if depthFrameColor is not None:
-            cv2.imshow("depth", depthFrameColor)
+    # Random Colors for bounding boxes
+    bboxColors = np.random.randint(256, size=(numClasses, 3)).tolist()
 
     while not device.isClosed():
         imageQueueData = imageQueue.tryGet()
@@ -214,7 +135,10 @@ with dai.Device(pipeline) as device:
             depthFrameColor = cv2.applyColorMap(depthFrameColor, cv2.COLORMAP_HOT)
 
         if frame is not None:
-            displayFrame("image", frame, depthFrameColor)
+            displayFrame(frame, detections, labelMap, bboxColors, depthFrameColor)
+            # Show the frame
+            cv2.imshow("image", frame)
+            cv2.imshow("depth", depthFrameColor)
 
         if cv2.waitKey(1) == ord("q"):
             break
