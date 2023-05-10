@@ -40,7 +40,7 @@ def to_planar(arr: np.ndarray, shape: tuple) -> np.ndarray:
 def send_img(inFrameQueue, frame, W, H):
     img = dai.ImgFrame()
     img.setData(to_planar(frame, (W, H)))
-    img.setTimestamp(monotonic())
+    img.setTimestamp(dai.Clock.now())
     img.setWidth(W)
     img.setHeight(H)
     inFrameQueue.send(img)

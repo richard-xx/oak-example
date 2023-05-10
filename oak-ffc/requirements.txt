@@ -1,0 +1,6 @@
+-i https://pypi.tuna.tsinghua.edu.cn/simple
+--prefer-binary
+
+depthai>2
+opencv-python
+numpy
