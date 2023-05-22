@@ -1,4 +1,7 @@
 # coding=utf-8
+import time
+from datetime import datetime
+
 import cv2
 import depthai as dai
 
@@ -57,7 +60,8 @@ for cam_name, cam_props in cam_list.items():
         cam[cam_name].setResolution(mono_res_opts[cam_props["res"]])
         cam[cam_name].out.link(xout[cam_name].input)
     cam[cam_name].setBoardSocket(cam_socket_opts[cam_name])
-    cam[cam_name].initialControl.setExternalTrigger(4, 3)
+    # cam[cam_name].initialControl.setExternalTrigger(4, 3)
+    cam[cam_name].setFps(20.0)
 
     if cam_name == "CAM_A":
         cam[cam_name].initialControl.setFrameSyncMode(
@@ -92,24 +96,56 @@ with dai.Device(config) as device:
 
     q = {}
     for cam_name in cam_list:
-        q[cam_name] = device.getOutputQueue(name=cam_name, maxSize=4, blocking=False)
+        q[cam_name] = device.getOutputQueue(name=cam_name, maxSize=4, blocking=True)
         cv2.namedWindow(cam_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(cam_name, 640, 480)
 
-    while not device.isClosed():
-        frame_list = []
-        for cam_name in cam_list:
-            pkt = q[cam_name].tryGet()
-            if pkt is not None:
-                print(cam_name + ":", pkt.getTimestampDevice())
-                frame_list.append((cam_name, pkt.getCvFrame()))
+    # 用于存储需要截图的摄像头名称列表，按下 'c' 键可以切换
+    capture_cam_list = []
 
-        if frame_list:
+    while not device.isClosed():
+        # 存储当前采集到的每个摄像头最新的一帧图像
+        frames = []
+
+        # 遍历所有摄像头，从队列中获取最新的一帧图像
+        for cam_name in cam_list:
+            packet = q[cam_name].tryGet()  # type: dai.ImgFrame | None
+            if packet is not None:
+                print(cam_name + ":", packet.getTimestampDevice())
+                frames.append((cam_name, packet.getCvFrame()))
+
+        # 如果至少有一个摄像头有新的图像，则显示这些图像并保存截图（如果需要）
+        if frames:
             print("-------------------------------")
-            for cam_name, frame in frame_list:
+            capture_time = datetime.now().strftime("%Y%m%d_%H%M%S.%f")
+
+            for cam_name, frame in frames:
                 cv2.imshow(cam_name, frame)
+                # 如果该摄像头需要进行截图，则生成截图文件名并保存图片
+                if cam_name in capture_cam_list:
+                    width, height = frame.shape[:2]
+
+                    capture_file_name = (
+                        f"capture_{cam_name}_{cam_names[cam_name]}"
+                        f"_{width}x{height}_"
+                        f"{capture_time}.png"
+                    )
+
+                    print("Saving:", capture_file_name)
+                    # 将图像编码为 PNG 格式并写入文件
+                    image_data = cv2.imencode(".png", frame)[1]
+                    image_data.tofile(capture_file_name)
+
+                    # cv2.imwrite(capture_file_name, frame)
+                    # capture_cam_list.remove(cam_name)
 
         key = cv2.waitKey(1)
         if key == ord("q"):
             break
+        elif key == ord("c"):
+            if capture_cam_list:
+                capture_cam_list = []
+            else:
+                capture_cam_list = cam_list.copy()
+
     cv2.destroyAllWindows()
