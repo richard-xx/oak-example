@@ -1,16 +1,20 @@
 # coding=utf-8
-import time
+import contextlib
 
 import cv2
 import depthai as dai
 
 cam_list = {
-    "CAM_A": {"color": True, "res": "1080"},
-    "CAM_B": {"color": False, "res": "400"},
-    "CAM_C": {"color": False, "res": "400"},
-    "CAM_D": {"color": True, "res": "1080"},
-    # "CAM_E": {"color": False, "res": "1200"},
-    # "CAM_F": {"color": False, "res": "1200"},
+    "CAM_A": {"color": True, "res": "1080", "codec": "h265"},
+    "CAM_B": {"color": False, "res": "800", "codec": "h265"},
+    "CAM_C": {"color": False, "res": "800", "codec": "h265"},
+    "CAM_D": {"color": True, "res": "1080", "codec": "h265"},
+}
+
+codec_opts = {
+    "h264": dai.VideoEncoderProperties.Profile.H264_HIGH,
+    "h265": dai.VideoEncoderProperties.Profile.H265_MAIN,
+    "mjpeg": dai.VideoEncoderProperties.Profile.MJPEG,
 }
 
 mono_res_opts = {
@@ -37,8 +41,6 @@ cam_socket_to_name = {
     "LEFT": "CAM_B",
     "RIGHT": "CAM_C",
     "CAM_D": "CAM_D",
-    "CAM_E": "CAM_E",
-    "CAM_F": "CAM_F",
 }
 
 cam_socket_opts = {
@@ -46,8 +48,6 @@ cam_socket_opts = {
     "CAM_B": dai.CameraBoardSocket.LEFT,  # Or CAM_B
     "CAM_C": dai.CameraBoardSocket.RIGHT,  # Or CAM_C
     "CAM_D": dai.CameraBoardSocket.CAM_D,
-    "CAM_E": dai.CameraBoardSocket.CAM_E,
-    "CAM_F": dai.CameraBoardSocket.CAM_F,
 }
 
 
@@ -55,18 +55,41 @@ def create_pipeline():
     pipeline = dai.Pipeline()
     cam = {}
     xout = {}
+    video_encoders = {}
+    ve_out = {}
     for cam_name, cam_props in cam_list.items():
         xout[cam_name] = pipeline.create(dai.node.XLinkOut)
         xout[cam_name].setStreamName(cam_name)
+        video_encoders[cam_name] = pipeline.create(dai.node.VideoEncoder)
+        ve_out[cam_name] = pipeline.create(dai.node.XLinkOut)
+        ve_out[cam_name].setStreamName(f"{cam_name}_ve")
+        video_encoders[cam_name].bitstream.link(ve_out[cam_name].input)
+
         if cam_props["color"]:
             cam[cam_name] = pipeline.create(dai.node.ColorCamera)
             cam[cam_name].setResolution(color_res_opts[cam_props["res"]])
             cam[cam_name].isp.link(xout[cam_name].input)
+            cam[cam_name].video.link(video_encoders[cam_name].input)
         else:
             cam[cam_name] = pipeline.createMonoCamera()
             cam[cam_name].setResolution(mono_res_opts[cam_props["res"]])
             cam[cam_name].out.link(xout[cam_name].input)
+            cam[cam_name].out.link(video_encoders[cam_name].input)
         cam[cam_name].setBoardSocket(cam_socket_opts[cam_name])
+        cam[cam_name].setFps(20.0)
+
+        video_encoders[cam_name].setDefaultProfilePreset(
+            cam[cam_name].getFps(), codec_opts[cam_props["codec"]]
+        )
+
+        if cam_name == "CAM_A":
+            cam[cam_name].initialControl.setFrameSyncMode(
+                dai.CameraControl.FrameSyncMode.OUTPUT
+            )
+        else:
+            cam[cam_name].initialControl.setFrameSyncMode(
+                dai.CameraControl.FrameSyncMode.INPUT
+            )
 
     return pipeline
 
@@ -74,8 +97,20 @@ def create_pipeline():
 def main():
     global cam_list
 
-    # 创建 DepthAI 设备对象
-    with dai.Device() as device:
+    # 创建 DepthAI 设备配置对象
+    config = dai.Device.Config()
+
+    # 设置 GPIO 引脚 6 为输出模式，初始状态为高电平
+    config.board.gpio[6] = dai.BoardConfig.GPIO(
+        dai.BoardConfig.GPIO.OUTPUT, dai.BoardConfig.GPIO.Level.HIGH
+    )
+    # 设置 OpenVINO 版本号
+    config.version = dai.OpenVINO.VERSION_2021_4
+
+    with contextlib.ExitStack() as stack:
+        # 创建 DepthAI 设备对象
+        device = stack.enter_context(dai.Device(config))
+
         # 获取连接到设备上的相机列表，输出相机名称、分辨率、支持的颜色类型等信息
         print("Connected cameras:")
         sensor_names = {}  # type: dict[str, str]
@@ -107,50 +142,55 @@ def main():
         # 开始执行给定的管道
         device.startPipeline(create_pipeline())
 
-        # 创建相机输出队列
+        # 创建相机输出队列和视频文件
         output_queues = {}
+        video_queues = {}
+        video_files = {}
         for cam_name in cam_list:
             output_queues[cam_name] = device.getOutputQueue(
                 name=cam_name, maxSize=4, blocking=False
             )
+            video_queues[cam_name] = device.getOutputQueue(
+                name=f"{cam_name}_ve", maxSize=30, blocking=True
+            )
             cv2.namedWindow(cam_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(cam_name, 640, 480)
 
-        capture_list = []
+            video_files[cam_name] = stack.enter_context(
+                open(f"{cam_name}.{cam_list[cam_name]['codec']}", "wb")
+            )
 
-        # 循环读取并显示视频流
+        # 循环读取，显示并保存视频流
         while not device.isClosed():
+            frame_list = []
             for cam_name in cam_list:
                 packet = output_queues[cam_name].tryGet()
                 if packet is not None:
-                    # 获取视频帧并显示
-                    frame = packet.getCvFrame()
+                    # 输出视频帧的时间戳
+                    print(cam_name + ":", packet.getTimestampDevice())
+                    # 获取视频帧并添加到帧列表中
+                    frame_list.append((cam_name, packet.getCvFrame()))
+
+                if video_queues[cam_name].has():
+                    # 将视频流编码并保存到文件中
+                    video_queues[cam_name].get().getData().tofile(video_files[cam_name])
+
+            if frame_list:
+                print("-------------------------------")
+                # 显示视频帧
+                for cam_name, frame in frame_list:
                     cv2.imshow(cam_name, frame)
 
-                    if cam_name in capture_list:
-                        width, height = packet.getWidth(), packet.getHeight()
-                        capture_file_name = (
-                            f"capture_{cam_name}_{sensor_names[cam_name]}"
-                            f"_{width}x{height}_"
-                            f"exp_{int(packet.getExposureTime().total_seconds() * 1e6)}_"
-                            f"iso_{packet.getSensitivity()}_"
-                            f"lens_{packet.getLensPosition()}_"
-                            f"{capture_time}_{packet.getSequenceNum()}.png"
-                        )
-
-                        print("Saving:", capture_file_name)
-                        # fix a chinese dir path
-                        cv2.imencode(".png", frame)[1].tofile(capture_file_name)
-                        # cv2.imwrite(capture_file_name, frame)
-                        capture_list.remove(cam_name)
-
+            # 等待用户按下 "q" 键，退出循环并关闭窗口
             key = cv2.waitKey(1)
             if key == ord("q"):
                 break
-            elif key == ord("c"):
-                capture_list = cam_list.copy()
-                capture_time = time.strftime("%Y%m%d_%H%M%S")
         cv2.destroyAllWindows()
+
+        print(f"要查看编码后的数据，使用下面的命令将流文件（.mjpeg/.ḣ264/.ḣ265）转换成视频文件（.mp4）:")
+        for cam_name in cam_list:
+            codec = cam_list[cam_name]["codec"]
+            print(f"ffmpeg -i {cam_name}.{codec} -c copy {cam_name}.mp4")
 
 
 if __name__ == "__main__":

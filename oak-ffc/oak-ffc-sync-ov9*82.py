@@ -1,16 +1,23 @@
 # coding=utf-8
-import time
-
 import cv2
 import depthai as dai
 
+"""
+# OV9782
 cam_list = {
-    "CAM_A": {"color": True, "res": "1080"},
+    "CAM_A": {"color": True, "res": "400"},
+    "CAM_B": {"color": True, "res": "400"},
+    "CAM_C": {"color": True, "res": "400"},
+    "CAM_D": {"color": True, "res": "400"},
+}
+"""
+
+# OV9282
+cam_list = {
+    "CAM_A": {"color": False, "res": "400"},
     "CAM_B": {"color": False, "res": "400"},
     "CAM_C": {"color": False, "res": "400"},
-    "CAM_D": {"color": True, "res": "1080"},
-    # "CAM_E": {"color": False, "res": "1200"},
-    # "CAM_F": {"color": False, "res": "1200"},
+    "CAM_D": {"color": False, "res": "400"},
 }
 
 mono_res_opts = {
@@ -37,8 +44,6 @@ cam_socket_to_name = {
     "LEFT": "CAM_B",
     "RIGHT": "CAM_C",
     "CAM_D": "CAM_D",
-    "CAM_E": "CAM_E",
-    "CAM_F": "CAM_F",
 }
 
 cam_socket_opts = {
@@ -46,8 +51,6 @@ cam_socket_opts = {
     "CAM_B": dai.CameraBoardSocket.LEFT,  # Or CAM_B
     "CAM_C": dai.CameraBoardSocket.RIGHT,  # Or CAM_C
     "CAM_D": dai.CameraBoardSocket.CAM_D,
-    "CAM_E": dai.CameraBoardSocket.CAM_E,
-    "CAM_F": dai.CameraBoardSocket.CAM_F,
 }
 
 
@@ -67,15 +70,34 @@ def create_pipeline():
             cam[cam_name].setResolution(mono_res_opts[cam_props["res"]])
             cam[cam_name].out.link(xout[cam_name].input)
         cam[cam_name].setBoardSocket(cam_socket_opts[cam_name])
+        cam[cam_name].initialControl.setExternalTrigger(4, 3)
 
+        if cam_name == "CAM_A":
+            cam[cam_name].initialControl.setFrameSyncMode(
+                dai.CameraControl.FrameSyncMode.OUTPUT
+            )
+        else:
+            cam[cam_name].initialControl.setFrameSyncMode(
+                dai.CameraControl.FrameSyncMode.INPUT
+            )
     return pipeline
 
 
 def main():
     global cam_list
 
+    # 创建 DepthAI 设备配置对象
+    config = dai.Device.Config()
+
+    # 设置 GPIO 引脚 6 为输出模式，初始状态为高电平
+    config.board.gpio[6] = dai.BoardConfig.GPIO(
+        dai.BoardConfig.GPIO.OUTPUT, dai.BoardConfig.GPIO.Level.HIGH
+    )
+    # 设置 OpenVINO 版本号
+    config.version = dai.OpenVINO.VERSION_2021_4
+
     # 创建 DepthAI 设备对象
-    with dai.Device() as device:
+    with dai.Device(config) as device:
         # 获取连接到设备上的相机列表，输出相机名称、分辨率、支持的颜色类型等信息
         print("Connected cameras:")
         sensor_names = {}  # type: dict[str, str]
@@ -116,40 +138,27 @@ def main():
             cv2.namedWindow(cam_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(cam_name, 640, 480)
 
-        capture_list = []
-
         # 循环读取并显示视频流
         while not device.isClosed():
+            frame_list = []
             for cam_name in cam_list:
                 packet = output_queues[cam_name].tryGet()
                 if packet is not None:
-                    # 获取视频帧并显示
-                    frame = packet.getCvFrame()
+                    # 输出视频帧的时间戳
+                    print(cam_name + ":", packet.getTimestampDevice())
+                    # 获取视频帧并添加到帧列表中
+                    frame_list.append((cam_name, packet.getCvFrame()))
+
+            if frame_list:
+                print("-------------------------------")
+                # 显示视频帧
+                for cam_name, frame in frame_list:
                     cv2.imshow(cam_name, frame)
 
-                    if cam_name in capture_list:
-                        width, height = packet.getWidth(), packet.getHeight()
-                        capture_file_name = (
-                            f"capture_{cam_name}_{sensor_names[cam_name]}"
-                            f"_{width}x{height}_"
-                            f"exp_{int(packet.getExposureTime().total_seconds() * 1e6)}_"
-                            f"iso_{packet.getSensitivity()}_"
-                            f"lens_{packet.getLensPosition()}_"
-                            f"{capture_time}_{packet.getSequenceNum()}.png"
-                        )
-
-                        print("Saving:", capture_file_name)
-                        # fix a chinese dir path
-                        cv2.imencode(".png", frame)[1].tofile(capture_file_name)
-                        # cv2.imwrite(capture_file_name, frame)
-                        capture_list.remove(cam_name)
-
+            # 等待用户按下 "q" 键，退出循环并关闭窗口
             key = cv2.waitKey(1)
             if key == ord("q"):
                 break
-            elif key == ord("c"):
-                capture_list = cam_list.copy()
-                capture_time = time.strftime("%Y%m%d_%H%M%S")
         cv2.destroyAllWindows()
 
 
