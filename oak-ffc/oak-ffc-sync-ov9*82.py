@@ -1,14 +1,21 @@
 # coding=utf-8
+from __future__ import annotations
+
+import collections
+import time
+
 import cv2
 import depthai as dai
 
+FPS = 60
+FRAME_SYNC_OUTPUT = "CAM_A"
 """
 # OV9782
 cam_list = {
-    "CAM_A": {"color": True, "res": "400"},
-    "CAM_B": {"color": True, "res": "400"},
-    "CAM_C": {"color": True, "res": "400"},
-    "CAM_D": {"color": True, "res": "400"},
+    "CAM_A": {"color": True, "res": "800"},
+    "CAM_B": {"color": True, "res": "800"},
+    "CAM_C": {"color": True, "res": "800"},
+    "CAM_D": {"color": True, "res": "800"},
 }
 """
 
@@ -43,13 +50,16 @@ cam_socket_to_name = {
     "RGB": "CAM_A",
     "LEFT": "CAM_B",
     "RIGHT": "CAM_C",
+    "CAM_A": "CAM_A",
+    "CAM_B": "CAM_B",
+    "CAM_C": "CAM_C",
     "CAM_D": "CAM_D",
 }
 
 cam_socket_opts = {
-    "CAM_A": dai.CameraBoardSocket.RGB,  # Or CAM_A
-    "CAM_B": dai.CameraBoardSocket.LEFT,  # Or CAM_B
-    "CAM_C": dai.CameraBoardSocket.RIGHT,  # Or CAM_C
+    "CAM_A": dai.CameraBoardSocket.CAM_A,
+    "CAM_B": dai.CameraBoardSocket.CAM_B,
+    "CAM_C": dai.CameraBoardSocket.CAM_C,
     "CAM_D": dai.CameraBoardSocket.CAM_D,
 }
 
@@ -70,9 +80,10 @@ def create_pipeline():
             cam[cam_name].setResolution(mono_res_opts[cam_props["res"]])
             cam[cam_name].out.link(xout[cam_name].input)
         cam[cam_name].setBoardSocket(cam_socket_opts[cam_name])
-        cam[cam_name].initialControl.setExternalTrigger(4, 3)
+        cam[cam_name].setFps(FPS)
+        # cam[cam_name].initialControl.setExternalTrigger(4, 3)
 
-        if cam_name == "CAM_A":
+        if cam_name == FRAME_SYNC_OUTPUT:
             cam[cam_name].initialControl.setFrameSyncMode(
                 dai.CameraControl.FrameSyncMode.OUTPUT
             )
@@ -94,7 +105,7 @@ def main():
         dai.BoardConfig.GPIO.OUTPUT, dai.BoardConfig.GPIO.Level.HIGH
     )
     # 设置 OpenVINO 版本号
-    config.version = dai.OpenVINO.VERSION_2021_4
+    # config.version = dai.OpenVINO.VERSION_2021_4
 
     # 创建 DepthAI 设备对象
     with dai.Device(config) as device:
@@ -113,17 +124,14 @@ def main():
 
             # 更新相机属性表
             cam_name = cam_socket_to_name[p.socket.name]
-            cam_feature = cam_list.get(cam_name)
-            if cam_feature:
-                color_type = "COLOR" if cam_feature.get("color") else "MONO"
-                if color_type not in supported_types:
-                    cam_feature["color"] = not cam_feature["color"]
-
             sensor_names[cam_name] = p.sensorName
 
         # 仅保留设备已连接的相机
+        for cam_name in set(cam_list).difference(sensor_names):
+            print(f"{cam_name} is not connected !")
+
         cam_list = {
-            name: cam_list[name] for name in cam_list if name in sensor_names.keys()
+            name: cam_list[name] for name in set(cam_list).intersection(sensor_names)
         }
 
         # 开始执行给定的管道
@@ -138,6 +146,8 @@ def main():
             cv2.namedWindow(cam_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(cam_name, 640, 480)
 
+        fps_handler = FPSHandler()
+
         # 循环读取并显示视频流
         while not device.isClosed():
             frame_list = []
@@ -150,9 +160,11 @@ def main():
                     frame_list.append((cam_name, packet.getCvFrame()))
 
             if frame_list:
+                fps_handler.tick("FRAME")
                 print("-------------------------------")
                 # 显示视频帧
                 for cam_name, frame in frame_list:
+                    fps_handler.draw_fps(frame, "FRAME")
                     cv2.imshow(cam_name, frame)
 
             # 等待用户按下 "q" 键，退出循环并关闭窗口
@@ -160,6 +172,139 @@ def main():
             if key == ord("q"):
                 break
         cv2.destroyAllWindows()
+
+class FPSHandler:
+    """
+    Class that handles all FPS-related operations.
+
+    Mostly used to calculate different streams FPS, but can also be
+    used to feed the video file based on its FPS property, not app performance (this prevents the video from being sent
+    to quickly if we finish processing a frame earlier than the next video frame should be consumed)
+    """
+
+    _fps_bg_color = (0, 0, 0)
+    _fps_color = (255, 255, 255)
+    _fps_type = cv2.FONT_HERSHEY_SIMPLEX
+    _fps_line_type = cv2.LINE_AA
+
+    def __init__(self, cap=None, max_ticks=100):
+        """
+        Constructor that initializes the class with a video file object and a maximum ticks amount for FPS calculation
+
+        Args:
+            cap (cv2.VideoCapture, Optional): handler to the video file object
+            max_ticks (int, Optional): maximum ticks amount for FPS calculation
+        """
+        self._timestamp = None
+        self._start = None
+        self._framerate = cap.get(cv2.CAP_PROP_FPS) if cap is not None else None
+        self._useCamera = cap is None
+
+        self._iterCnt = 0
+        self._ticks = {}
+
+        if max_ticks < 2:  # noqa: PLR2004
+            msg = f"Proviced max_ticks value must be 2 or higher (supplied: {max_ticks})"
+            raise ValueError(msg)
+
+        self._maxTicks = max_ticks
+
+    def next_iter(self):
+        """Marks the next iteration of the processing loop. Will use `time.sleep` method if initialized with video file object"""
+        if self._start is None:
+            self._start = time.monotonic()
+
+        if not self._useCamera and self._timestamp is not None:
+            frame_delay = 1.0 / self._framerate
+            delay = (self._timestamp + frame_delay) - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+        self._timestamp = time.monotonic()
+        self._iterCnt += 1
+
+    def tick(self, name):
+        """
+        Marks a point in time for specified name
+
+        Args:
+            name (str): Specifies timestamp name
+        """
+        if name not in self._ticks:
+            self._ticks[name] = collections.deque(maxlen=self._maxTicks)
+        self._ticks[name].append(time.monotonic())
+
+    def tick_fps(self, name):
+        """
+        Calculates the FPS based on specified name
+
+        Args:
+            name (str): Specifies timestamps' name
+
+        Returns:
+            float: Calculated FPS or `0.0` (default in case of failure)
+        """
+        if name in self._ticks and len(self._ticks[name]) > 1:
+            time_diff = self._ticks[name][-1] - self._ticks[name][0]
+            return (len(self._ticks[name]) - 1) / time_diff if time_diff != 0 else 0.0
+        return 0.0
+
+    def fps(self):
+        """
+        Calculates FPS value based on `nextIter` calls, being the FPS of processing loop
+
+        Returns:
+            float: Calculated FPS or `0.0` (default in case of failure)
+        """
+        if self._start is None or self._timestamp is None:
+            return 0.0
+        time_diff = self._timestamp - self._start
+        return self._iterCnt / time_diff if time_diff != 0 else 0.0
+
+    def print_status(self):
+        """Prints total FPS for all names stored in :func:`tick` calls"""
+        print("=== TOTAL FPS ===")
+        for name in self._ticks:
+            print(f"[{name}]: {self.tick_fps(name):.1f}")
+
+    def draw_fps(self, frame, name):
+        """
+        Draws FPS values on requested frame, calculated based on specified name
+
+        Args:
+            frame (numpy.ndarray): Frame object to draw values on
+            name (str): Specifies timestamps' name
+        """
+        frame_fps = f"{name.upper()} FPS: {round(self.tick_fps(name), 1)}"
+        # cv2.rectangle(frame, (0, 0), (120, 35), (255, 255, 255), cv2.FILLED)
+        draw_text(
+            frame,
+            frame_fps,
+            (5, 15),
+            color=(255, 255, 255),
+            bg_color=(0, 0, 0),
+        )
+
+        if "nn" in self._ticks:
+            draw_text(
+                frame,
+                f"NN FPS:  {round(self.tick_fps('nn'), 1)}",
+                (5, 30),
+                color=(255,255,255),
+                bg_color=(0, 0, 0),
+            )
+
+
+def draw_text(
+    frame,
+    text,
+    org,
+    color=(255, 255, 255),
+    bg_color=(128, 128, 128),
+    font_scale=0.5,
+    thickness=1,
+):
+    cv2.putText(frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_scale, bg_color, thickness + 3, cv2.LINE_AA)
+    cv2.putText(frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
 
 
 if __name__ == "__main__":

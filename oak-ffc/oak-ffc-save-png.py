@@ -1,4 +1,6 @@
 # coding=utf-8
+from __future__ import annotations
+
 import time
 
 import cv2
@@ -36,15 +38,18 @@ cam_socket_to_name = {
     "RGB": "CAM_A",
     "LEFT": "CAM_B",
     "RIGHT": "CAM_C",
+    "CAM_A": "CAM_A",
+    "CAM_B": "CAM_B",
+    "CAM_C": "CAM_C",
     "CAM_D": "CAM_D",
     "CAM_E": "CAM_E",
     "CAM_F": "CAM_F",
 }
 
 cam_socket_opts = {
-    "CAM_A": dai.CameraBoardSocket.RGB,  # Or CAM_A
-    "CAM_B": dai.CameraBoardSocket.LEFT,  # Or CAM_B
-    "CAM_C": dai.CameraBoardSocket.RIGHT,  # Or CAM_C
+    "CAM_A": dai.CameraBoardSocket.CAM_A,
+    "CAM_B": dai.CameraBoardSocket.CAM_B,
+    "CAM_C": dai.CameraBoardSocket.CAM_C,
     "CAM_D": dai.CameraBoardSocket.CAM_D,
     "CAM_E": dai.CameraBoardSocket.CAM_E,
     "CAM_F": dai.CameraBoardSocket.CAM_F,
@@ -91,17 +96,14 @@ def main():
 
             # 更新相机属性表
             cam_name = cam_socket_to_name[p.socket.name]
-            cam_feature = cam_list.get(cam_name)
-            if cam_feature:
-                color_type = "COLOR" if cam_feature.get("color") else "MONO"
-                if color_type not in supported_types:
-                    cam_feature["color"] = not cam_feature["color"]
-
             sensor_names[cam_name] = p.sensorName
 
         # 仅保留设备已连接的相机
+        for cam_name in set(cam_list).difference(sensor_names):
+            print(f"{cam_name} is not connected !")
+
         cam_list = {
-            name: cam_list[name] for name in cam_list if name in sensor_names.keys()
+            name: cam_list[name] for name in set(cam_list).intersection(sensor_names)
         }
 
         # 开始执行给定的管道
@@ -117,7 +119,7 @@ def main():
             cv2.resizeWindow(cam_name, 640, 480)
 
         capture_list = []
-
+        capture_time = None
         # 循环读取并显示视频流
         while not device.isClosed():
             for cam_name in cam_list:

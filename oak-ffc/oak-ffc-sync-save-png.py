@@ -1,4 +1,6 @@
 # coding=utf-8
+from __future__ import annotations
+
 from datetime import datetime
 from multiprocessing import JoinableQueue, Process
 from pathlib import Path
@@ -6,11 +8,11 @@ from queue import Empty, Full
 
 import cv2
 import depthai as dai
-
 from utils import PairingSystem
 
 dest = Path(__file__).parent.joinpath("data")
 dest.mkdir(parents=True, exist_ok=True)
+FRAME_SYNC_OUTPUT = "CAM_A"
 
 cam_list = {
     "CAM_A": {"color": True, "res": "800"},
@@ -42,14 +44,21 @@ cam_socket_to_name = {
     "RGB": "CAM_A",
     "LEFT": "CAM_B",
     "RIGHT": "CAM_C",
+    "CAM_A": "CAM_A",
+    "CAM_B": "CAM_B",
+    "CAM_C": "CAM_C",
     "CAM_D": "CAM_D",
+    "CAM_E": "CAM_E",
+    "CAM_F": "CAM_F",
 }
 
 cam_socket_opts = {
-    "CAM_A": dai.CameraBoardSocket.RGB,  # Or CAM_A
-    "CAM_B": dai.CameraBoardSocket.LEFT,  # Or CAM_B
-    "CAM_C": dai.CameraBoardSocket.RIGHT,  # Or CAM_C
+    "CAM_A": dai.CameraBoardSocket.CAM_A,
+    "CAM_B": dai.CameraBoardSocket.CAM_B,
+    "CAM_C": dai.CameraBoardSocket.CAM_C,
     "CAM_D": dai.CameraBoardSocket.CAM_D,
+    "CAM_E": dai.CameraBoardSocket.CAM_E,
+    "CAM_F": dai.CameraBoardSocket.CAM_F,
 }
 
 
@@ -72,7 +81,7 @@ def create_pipeline():
         # cam[cam_name].initialControl.setExternalTrigger(4, 3)
         # cam[cam_name].setFps(20.0)
 
-        if cam_name == "CAM_A":
+        if cam_name == FRAME_SYNC_OUTPUT:
             cam[cam_name].initialControl.setFrameSyncMode(
                 dai.CameraControl.FrameSyncMode.OUTPUT
             )
@@ -154,8 +163,11 @@ def main():
             sensor_names[cam_name] = p.sensorName
 
         # 仅保留设备已连接的相机
+        for cam_name in set(cam_list).difference(sensor_names):
+            print(f"{cam_name} is not connected !")
+
         cam_list = {
-            name: cam_list[name] for name in cam_list if name in sensor_names.keys()
+            name: cam_list[name] for name in set(cam_list).intersection(sensor_names)
         }
 
         # 开始执行给定的管道
@@ -218,9 +230,9 @@ def main():
 
             # 处理按键事件
             key = cv2.waitKey(1)
-            if key == ord("output_queues"):
+            if key == ord("q"):
                 break
-            elif key == ord("c"):
+            if key == ord("c"):
                 save = not save
                 if save:
                     print("开始保存图片")

@@ -1,7 +1,10 @@
 # coding=utf-8
-from typing import Any, Dict, List, Optional, Union
+from __future__ import annotations
 
-import depthai as dai
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import depthai as dai
 
 
 def step_norm(value, threshold=0.0003):
@@ -66,9 +69,7 @@ class PairingSystem:
     threshold = 0.3  # 用于舍入的阈值
 
     def __init__(self):
-        """
-        初始化 PairingSystem 类的实例。
-        """
+        """初始化 PairingSystem 类的实例。"""
         # 初始化类的属性
         self.ts_packets = {}
         self.seq_packets = {}
@@ -77,7 +78,7 @@ class PairingSystem:
 
     def add_packets(
         self,
-        packets: Optional[Union[dai.ImgFrame, List[dai.ImgFrame]]],
+        packets: dai.ImgFrame | list[dai.ImgFrame] | None,
         stream_name: str,
     ) -> None:
         """
@@ -106,7 +107,7 @@ class PairingSystem:
                     stream_name: packet,
                 }
 
-    def get_pairs(self) -> List[Dict[str, Any]]:
+    def get_pairs(self) -> list[dict[str, Any]]:
         """
         在已添加的数据包中查找匹配的时间戳和序列号，并返回匹配的数据包。
 
@@ -138,9 +139,7 @@ class PairingSystem:
         return results
 
     def collect_garbage(self) -> None:
-        """
-        删除已匹配的数据包，以便节省内存空间。
-        """
+        """删除已匹配的数据包，以便节省内存空间。"""
         # 删除所有序列号小于等于上一个匹配的序列号的数据包
         for key in list(self.seq_packets.keys()):
             if key <= self.last_paired_seq:

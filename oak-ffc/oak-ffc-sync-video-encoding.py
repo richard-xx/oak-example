@@ -1,8 +1,12 @@
 # coding=utf-8
+from __future__ import annotations
+
 import contextlib
 
 import cv2
 import depthai as dai
+
+FRAME_SYNC_OUTPUT = "CAM_A"
 
 cam_list = {
     "CAM_A": {"color": True, "res": "1080", "codec": "h265"},
@@ -40,14 +44,21 @@ cam_socket_to_name = {
     "RGB": "CAM_A",
     "LEFT": "CAM_B",
     "RIGHT": "CAM_C",
+    "CAM_A": "CAM_A",
+    "CAM_B": "CAM_B",
+    "CAM_C": "CAM_C",
     "CAM_D": "CAM_D",
+    "CAM_E": "CAM_E",
+    "CAM_F": "CAM_F",
 }
 
 cam_socket_opts = {
-    "CAM_A": dai.CameraBoardSocket.RGB,  # Or CAM_A
-    "CAM_B": dai.CameraBoardSocket.LEFT,  # Or CAM_B
-    "CAM_C": dai.CameraBoardSocket.RIGHT,  # Or CAM_C
+    "CAM_A": dai.CameraBoardSocket.CAM_A,
+    "CAM_B": dai.CameraBoardSocket.CAM_B,
+    "CAM_C": dai.CameraBoardSocket.CAM_C,
     "CAM_D": dai.CameraBoardSocket.CAM_D,
+    "CAM_E": dai.CameraBoardSocket.CAM_E,
+    "CAM_F": dai.CameraBoardSocket.CAM_F,
 }
 
 
@@ -82,7 +93,7 @@ def create_pipeline():
             cam[cam_name].getFps(), codec_opts[cam_props["codec"]]
         )
 
-        if cam_name == "CAM_A":
+        if cam_name == FRAME_SYNC_OUTPUT:
             cam[cam_name].initialControl.setFrameSyncMode(
                 dai.CameraControl.FrameSyncMode.OUTPUT
             )
@@ -135,8 +146,11 @@ def main():
             sensor_names[cam_name] = p.sensorName
 
         # 仅保留设备已连接的相机
+        for cam_name in set(cam_list).difference(sensor_names):
+            print(f"{cam_name} is not connected !")
+
         cam_list = {
-            name: cam_list[name] for name in cam_list if name in sensor_names.keys()
+            name: cam_list[name] for name in set(cam_list).intersection(sensor_names)
         }
 
         # 开始执行给定的管道
@@ -187,7 +201,7 @@ def main():
                 break
         cv2.destroyAllWindows()
 
-        print(f"要查看编码后的数据，使用下面的命令将流文件（.mjpeg/.ḣ264/.ḣ265）转换成视频文件（.mp4）:")
+        print("要查看编码后的数据，使用下面的命令将流文件（.mjpeg/.ḣ264/.ḣ265）转换成视频文件（.mp4）:")
         for cam_name in cam_list:
             codec = cam_list[cam_name]["codec"]
             print(f"ffmpeg -i {cam_name}.{codec} -c copy {cam_name}.mp4")
