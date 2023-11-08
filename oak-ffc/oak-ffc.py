@@ -94,12 +94,6 @@ def main():
 
             # 更新相机属性表
             cam_name = cam_socket_to_name[p.socket.name]
-            cam_feature = cam_list.get(cam_name)
-            if cam_feature:
-                color_type = "COLOR" if cam_feature.get("color") else "MONO"
-                if color_type not in supported_types:
-                    cam_feature["color"] = not cam_feature["color"]
-
             sensor_names[cam_name] = p.sensorName
 
         # 仅保留设备已连接的相机
