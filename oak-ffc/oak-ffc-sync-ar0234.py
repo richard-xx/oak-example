@@ -1,10 +1,10 @@
 # coding=utf-8
 from __future__ import annotations
 
-import time
-
 import cv2
 import depthai as dai
+
+FPS = 30
 
 cam_list = {
     "CAM_A": {"color": True, "res": "1200"},
@@ -66,47 +66,84 @@ def create_pipeline():
             cam[cam_name].setResolution(mono_res_opts[cam_props["res"]])
             cam[cam_name].out.link(xout[cam_name].input)
         cam[cam_name].setBoardSocket(cam_socket_opts[cam_name])
-        cam[cam_name].initialControl.setExternalTrigger(4, 3)
+        cam[cam_name].setFps(FPS)
+        # cam[cam_name].initialControl.setExternalTrigger(4, 3)
+        cam[cam_name].initialControl.setFrameSyncMode(
+            dai.CameraControl.FrameSyncMode.INPUT,
+        )
 
     script = pipeline.create(dai.node.Script)
+    script.setProcessor(dai.ProcessorType.LEON_CSS)
     script.setScript(
         """# coding=utf-8
-import GPIO
 import time
-GPIO_PIN=41 # Trigger
+import GPIO
 
-GPIO.setup(GPIO_PIN, GPIO.OUT, GPIO.PULL_DOWN)
+# Script static arguments
+fps = %f
 
-def capture():
-    GPIO.write(GPIO_PIN, True)
-    time.sleep(0.001) # 1ms pulse is enough
-    GPIO.write(GPIO_PIN, False)
+calib = Device.readCalibration2().getEepromData()
+prodName  = calib.productName
+boardName = calib.boardName
+boardRev  = calib.boardRev
 
-while True:
-    time.sleep(0.5) 
-    capture()
-    node.warn('Trigger successful')
+node.warn(f'Product name  : {prodName}')
+node.warn(f'Board name    : {boardName}')
+node.warn(f'Board revision: {boardRev}')
+
+revision = -1
+# Very basic parsing here, TODO improve
+if len(boardRev) >= 2 and boardRev[0] == 'R':
+    revision = int(boardRev[1])
+node.warn(f'Parsed revision number: {revision}')
+
+# Defaults for OAK-FFC-4P older revisions (<= R5)
+GPIO_FSIN_2LANE = 41  # COM_AUX_IO2
+GPIO_FSIN_4LANE = 40
+GPIO_FSIN_MODE_SELECT = 6  # Drive 1 to tie together FSIN_2LANE and FSIN_4LANE
+
+if revision >= 6:
+    GPIO_FSIN_2LANE = 41  # still COM_AUX_IO2, no PWM capable
+    GPIO_FSIN_4LANE = 42  # also not PWM capable
+    GPIO_FSIN_MODE_SELECT = 38  # Drive 1 to tie together FSIN_2LANE and FSIN_4LANE
+# Note: on R7 GPIO_FSIN_MODE_SELECT is pulled up, driving high isn't necessary (but fine to do)
+
+# GPIO initialization
+GPIO.setup(GPIO_FSIN_2LANE, GPIO.OUT)
+GPIO.write(GPIO_FSIN_2LANE, 0)
+
+GPIO.setup(GPIO_FSIN_4LANE, GPIO.IN)
+
+GPIO.setup(GPIO_FSIN_MODE_SELECT, GPIO.OUT)
+GPIO.write(GPIO_FSIN_MODE_SELECT, 1)
+
+period = 1 / fps
+active = 0.001
+
+node.warn(f'FPS: {fps}  Period: {period}')
+
+withInterrupts = False
+if withInterrupts:
+    node.critical(f'[TODO] FSYNC with timer interrupts (more precise) not implemented')
+else:
+    overhead = 0.003  # Empirical, TODO add thread priority option!
+    while True:
+        GPIO.write(GPIO_FSIN_2LANE, 1)
+        time.sleep(active)
+        GPIO.write(GPIO_FSIN_2LANE, 0)
+        time.sleep(period - active - overhead)
 """
+        % (FPS)
     )
 
     return pipeline
 
 
 def main():
-    global cam_list
-
-    # 创建 DepthAI 设备配置对象
-    config = dai.Device.Config()
-
-    # 设置 GPIO 引脚 6 为输出模式，初始状态为高电平
-    config.board.gpio[6] = dai.BoardConfig.GPIO(
-        dai.BoardConfig.GPIO.OUTPUT, dai.BoardConfig.GPIO.Level.HIGH
-    )
-    # 设置 OpenVINO 版本号
-    # config.version = dai.OpenVINO.VERSION_2021_4
+    global cam_list  # noqa: PLW0603
 
     # 创建 DepthAI 设备对象
-    with dai.Device(config) as device:
+    with dai.Device() as device:
         # 获取连接到设备上的相机列表，输出相机名称、分辨率、支持的颜色类型等信息
         print("Connected cameras:")
         sensor_names = {}  # type: dict[str, str]
