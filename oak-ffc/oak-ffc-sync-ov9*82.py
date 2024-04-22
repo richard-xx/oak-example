@@ -7,7 +7,11 @@ import time
 import cv2
 import depthai as dai
 
-FPS = 60
+# mono 400p : max 50fps
+# mono 720p/800p : max 40fps
+# color 720p/800p : max 30fps
+FPS = 40
+
 FRAME_SYNC_OUTPUT = "CAM_A"
 """
 # OV9782
@@ -21,10 +25,10 @@ cam_list = {
 
 # OV9282
 cam_list = {
-    "CAM_A": {"color": False, "res": "400"},
-    "CAM_B": {"color": False, "res": "400"},
-    "CAM_C": {"color": False, "res": "400"},
-    "CAM_D": {"color": False, "res": "400"},
+    "CAM_A": {"color": False, "res": "800"},
+    "CAM_B": {"color": False, "res": "800"},
+    "CAM_C": {"color": False, "res": "800"},
+    "CAM_D": {"color": False, "res": "800"},
 }
 
 mono_res_opts = {
@@ -66,6 +70,7 @@ cam_socket_opts = {
 
 def create_pipeline():
     pipeline = dai.Pipeline()
+    pipeline.setXLinkChunkSize(0)
     cam = {}
     xout = {}
     for cam_name, cam_props in cam_list.items():
@@ -85,27 +90,26 @@ def create_pipeline():
 
         if cam_name == FRAME_SYNC_OUTPUT:
             cam[cam_name].initialControl.setFrameSyncMode(
-                dai.CameraControl.FrameSyncMode.OUTPUT
+                dai.CameraControl.FrameSyncMode.OUTPUT,
             )
         else:
             cam[cam_name].initialControl.setFrameSyncMode(
-                dai.CameraControl.FrameSyncMode.INPUT
+                dai.CameraControl.FrameSyncMode.INPUT,
             )
+
     return pipeline
 
 
 def main():
-    global cam_list
-
     # 创建 DepthAI 设备配置对象
     config = dai.Device.Config()
 
     # 设置 GPIO 引脚 6 为输出模式，初始状态为高电平
-    config.board.gpio[6] = dai.BoardConfig.GPIO(
-        dai.BoardConfig.GPIO.OUTPUT, dai.BoardConfig.GPIO.Level.HIGH
+    config.board.gpio[42] = dai.BoardConfig.GPIO(
+        dai.BoardConfig.GPIO.INPUT,
+        dai.BoardConfig.GPIO.LOW,
+        dai.BoardConfig.GPIO.PULL_DOWN,
     )
-    # 设置 OpenVINO 版本号
-    # config.version = dai.OpenVINO.VERSION_2021_4
 
     # 创建 DepthAI 设备对象
     with dai.Device(config) as device:
@@ -126,45 +130,48 @@ def main():
             cam_name = cam_socket_to_name[p.socket.name]
             sensor_names[cam_name] = p.sensorName
 
-        # 仅保留设备已连接的相机
-        for cam_name in set(cam_list).difference(sensor_names):
-            print(f"{cam_name} is not connected !")
+        calib = device.readCalibration2().getEepromData()
+        prodName = calib.productName
+        boardName = calib.boardName
+        boardRev = calib.boardRev
 
-        cam_list = {
-            name: cam_list[name] for name in set(cam_list).intersection(sensor_names)
-        }
+        print(f"Product name  : {prodName}")
+        print(f"Board name    : {boardName}")
+        print(f"Board revision: {boardRev}")
 
-        # 开始执行给定的管道
         device.startPipeline(create_pipeline())
+
+        fps_handler = FPSHandler()
 
         # 创建相机输出队列
         output_queues = {}
         for cam_name in cam_list:
             output_queues[cam_name] = device.getOutputQueue(
-                name=cam_name, maxSize=4, blocking=False
+                name=cam_name,
+                maxSize=1,
+                blocking=False,
             )
             cv2.namedWindow(cam_name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(cam_name, 640, 480)
-
-        fps_handler = FPSHandler()
+            # cv2.resizeWindow(cam_name, 640, 480)
 
         # 循环读取并显示视频流
         while not device.isClosed():
             frame_list = []
             for cam_name in cam_list:
-                packet = output_queues[cam_name].tryGet()
+                packet = output_queues[cam_name].get()
                 if packet is not None:
-                    # 输出视频帧的时间戳
-                    print(cam_name + ":", packet.getTimestampDevice())
                     # 获取视频帧并添加到帧列表中
-                    frame_list.append((cam_name, packet.getCvFrame()))
+                    fps_handler.tick(f"FRAME_{cam_name}")
+                    frame_list.append((cam_name, packet))
 
             if frame_list:
-                fps_handler.tick("FRAME")
                 print("-------------------------------")
                 # 显示视频帧
-                for cam_name, frame in frame_list:
-                    fps_handler.draw_fps(frame, "FRAME")
+                for cam_name, packet in frame_list:
+                    frame = packet.getCvFrame()
+                    print(cam_name + ":", packet.getTimestampDevice())
+
+                    fps_handler.draw_fps(frame, f"FRAME_{cam_name}")
                     cv2.imshow(cam_name, frame)
 
             # 等待用户按下 "q" 键，退出循环并关闭窗口
@@ -172,6 +179,7 @@ def main():
             if key == ord("q"):
                 break
         cv2.destroyAllWindows()
+
 
 class FPSHandler:
     """
@@ -204,7 +212,7 @@ class FPSHandler:
         self._ticks = {}
 
         if max_ticks < 2:  # noqa: PLR2004
-            msg = f"Proviced max_ticks value must be 2 or higher (supplied: {max_ticks})"
+            msg = f"Provided max_ticks value must be 2 or higher (supplied: {max_ticks})"
             raise ValueError(msg)
 
         self._maxTicks = max_ticks
@@ -289,7 +297,7 @@ class FPSHandler:
                 frame,
                 f"NN FPS:  {round(self.tick_fps('nn'), 1)}",
                 (5, 30),
-                color=(255,255,255),
+                color=(255, 255, 255),
                 bg_color=(0, 0, 0),
             )
 
@@ -303,8 +311,26 @@ def draw_text(
     font_scale=0.5,
     thickness=1,
 ):
-    cv2.putText(frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_scale, bg_color, thickness + 3, cv2.LINE_AA)
-    cv2.putText(frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
+    cv2.putText(
+        frame,
+        text,
+        org,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        bg_color,
+        thickness + 3,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        text,
+        org,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
 
 
 if __name__ == "__main__":
